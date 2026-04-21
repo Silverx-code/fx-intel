@@ -1,7 +1,7 @@
 /**
  * FX·INTEL — Bybit Proxy Server
  * Handles CORS + request signing so the browser app can trade safely.
- * Run: node server.js
+ * Deployed on Render — Run: node server.js
  */
 
 import http from "http";
@@ -10,7 +10,7 @@ import crypto from "crypto";
 import { parse } from "url";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;  // Render injects PORT automatically
 const BYBIT_BASE = "api.bybit.com";
 
 // ── CORS headers for every response ──────────────────────────────────────────
@@ -302,7 +302,7 @@ server.listen(PORT, () => {
   console.log(`
   ╔══════════════════════════════════════════╗
   ║   FX·INTEL Bybit Proxy — Running ✓      ║
-  ║   http://localhost:${PORT}                  ║
+  ║   Port: ${PORT}                              ║
   ║                                          ║
   ║   Routes:                                ║
   ║   GET  /ticker?symbols=BTCUSDT           ║

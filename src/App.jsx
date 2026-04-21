@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const PROXY = "http://localhost:3001";
+// 👇 Replace this with your actual Render URL after deploying server.js
+const PROXY = "https://fx-intel.onrender.com";
 
 const CURRENCIES = ["USD/NGN", "EUR/USD", "GBP/USD", "EUR/NGN", "GBP/NGN", "USD/ZAR"];
 const BASE_RATES = {
@@ -13,14 +14,13 @@ const CURRENCY_ICONS = {
   "EUR/NGN": "🇪🇺🇳🇬", "GBP/NGN": "🇬🇧🇳🇬", "USD/ZAR": "🇺🇸🇿🇦"
 };
 
-// Bybit spot symbols that map to our displayed pairs (closest available)
 const BYBIT_SYMBOLS = {
   "BTC/USDT": "BTCUSDT",
   "ETH/USDT": "ETHUSDT",
   "BNB/USDT": "BNBUSDT",
   "SOL/USDT": "SOLUSDT",
   "XRP/USDT": "XRPUSDT",
-  "USDT/NGN": "USDTNGN",  // if available on your region
+  "USDT/NGN": "USDTNGN",
 };
 
 const TRADE_SYMBOLS = [
@@ -32,7 +32,7 @@ const TRADE_SYMBOLS = [
   { label: "DOGE/USDT", value: "DOGEUSDT", base: "DOGE", quote: "USDT" },
 ];
 
-// ── Simulated price helpers (for non-Bybit pairs) ─────────────────────────────
+// ── Simulated price helpers ───────────────────────────────────────────────────
 function generatePriceHistory(base, points = 60) {
   const data = [];
   let price = base * (0.97 + Math.random() * 0.06);
@@ -139,7 +139,6 @@ function ConfirmModal({ order, onConfirm, onCancel, loading }) {
         <div style={{ fontSize: 24, fontWeight: 700, color: isBuy ? "#00ff88" : "#ff4466", marginBottom: 20, fontFamily: "'Syne', sans-serif" }}>
           {isBuy ? "▲ BUY" : "▼ SELL"} {order.symbol}
         </div>
-
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
           {[
             ["Symbol", order.symbol],
@@ -154,11 +153,9 @@ function ConfirmModal({ order, onConfirm, onCancel, loading }) {
             </div>
           ))}
         </div>
-
         <div style={{ background: "rgba(255,170,0,0.08)", border: "1px solid rgba(255,170,0,0.2)", borderRadius: 10, padding: "10px 14px", fontSize: 11, color: "rgba(255,170,0,0.8)", marginBottom: 20 }}>
           ⚠️ This will place a REAL order on your Bybit account using real funds.
         </div>
-
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={onCancel} style={{ flex: 1, background: "transparent", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.6)", borderRadius: 10, padding: 12, cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
             Cancel
@@ -292,12 +289,12 @@ export default function FXIntelligence() {
   // ── Check proxy health ──────────────────────────────────────────────────────
   useEffect(() => {
     const check = () => {
-      fetch(`${PROXY}/ticker?symbols=BTCUSDT`, { signal: AbortSignal.timeout(2000) })
+      fetch(`${PROXY}/ticker?symbols=BTCUSDT`, { signal: AbortSignal.timeout(5000) })
         .then(r => r.ok ? setProxyOnline(true) : setProxyOnline(false))
         .catch(() => setProxyOnline(false));
     };
     check();
-    const interval = setInterval(check, 10000);
+    const interval = setInterval(check, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -357,7 +354,7 @@ export default function FXIntelligence() {
         setCredsError("Invalid keys or API error: " + (data.error || "unknown"));
       }
     } catch {
-      setCredsError("Could not reach proxy server. Is server.js running?");
+      setCredsError("Could not reach proxy server. Check your Render deployment.");
     }
     setBalanceLoading(false);
   };
@@ -562,13 +559,12 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
             {/* Proxy status banner */}
             {!proxyOnline && (
               <div style={{ ...s.card, marginBottom: 20, background: "rgba(255,68,102,0.06)", border: "1px solid rgba(255,68,102,0.25)" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#ff4466", marginBottom: 8 }}>⚠️ Proxy Server Not Running</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#ff4466", marginBottom: 8 }}>⚠️ Proxy Server Not Reachable</div>
                 <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", lineHeight: 1.8 }}>
-                  The proxy server bridges this app to Bybit. Start it by running:<br />
+                  Make sure your Render deployment is live and the URL in your app matches:<br />
                   <code style={{ background: "rgba(0,0,0,0.3)", color: "#00ff88", padding: "8px 14px", borderRadius: 8, display: "inline-block", marginTop: 8, fontSize: 13 }}>
-                    node server.js
+                    {PROXY}
                   </code>
-                  <br />in the same folder as <code style={{ color: "#00ff88" }}>server.js</code>. Then refresh this page.
                 </div>
               </div>
             )}
@@ -596,7 +592,7 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
                 ) : (
                   <div>
                     <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 14, lineHeight: 1.7 }}>
-                      Keys stay on your machine — they go through your local proxy server only, never to any third party.
+                      Keys are sent to your Render proxy server only — never to any third party.
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                       <div>
@@ -616,7 +612,7 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
                 )}
               </div>
 
-              {/* Live price for selected symbol */}
+              {/* Live price */}
               {credsSaved && (
                 <div style={s.card}>
                   <div style={s.label}>Live Price</div>
@@ -675,14 +671,11 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                 <div style={s.card}>
                   <div style={s.label}>Place Order</div>
-
-                  {/* Order result toast */}
                   {orderResult && (
                     <div style={{ padding: "12px 16px", borderRadius: 10, marginBottom: 16, background: orderResult.ok ? "rgba(0,255,136,0.1)" : "rgba(255,68,102,0.1)", border: `1px solid ${orderResult.ok ? "rgba(0,255,136,0.3)" : "rgba(255,68,102,0.3)"}`, fontSize: 12, color: orderResult.ok ? "#00ff88" : "#ff4466", animation: "fadeSlideIn 0.3s ease" }}>
                       {orderResult.ok ? `✓ Order placed! ID: ${orderResult.orderId}` : `✗ Order failed: ${orderResult.data?.retMsg || orderResult.error}`}
                     </div>
                   )}
-
                   <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
                       <div style={s.label}>Symbol</div>
@@ -690,8 +683,6 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
                         {TRADE_SYMBOLS.map(s => <option key={s.value} value={s.value}>{s.label} — {liveTickerData[s.value] ? "$"+parseFloat(liveTickerData[s.value].price).toLocaleString() : "..."}</option>)}
                       </select>
                     </div>
-
-                    {/* Buy / Sell toggle */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       {["Buy","Sell"].map(side => (
                         <button key={side} onClick={() => setOrderSide(side)} style={{ padding: "12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: 14, letterSpacing: 1, transition: "all 0.2s", border: orderSide === side ? `1px solid ${side === "Buy" ? "rgba(0,255,136,0.6)" : "rgba(255,68,102,0.6)"}` : "1px solid rgba(255,255,255,0.1)", background: orderSide === side ? (side === "Buy" ? "rgba(0,255,136,0.18)" : "rgba(255,68,102,0.18)") : "rgba(255,255,255,0.03)", color: orderSide === side ? (side === "Buy" ? "#00ff88" : "#ff4466") : "rgba(255,255,255,0.4)" }}>
@@ -699,8 +690,6 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
                         </button>
                       ))}
                     </div>
-
-                    {/* Market / Limit toggle */}
                     <div>
                       <div style={s.label}>Order Type</div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -711,35 +700,27 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
                         ))}
                       </div>
                     </div>
-
                     <div>
                       <div style={s.label}>Quantity ({selectedSymbol.base})</div>
-                      <input style={s.input} type="number" placeholder={`e.g. 0.001`} value={orderQty} onChange={e => setOrderQty(e.target.value)} min="0" step="any" />
+                      <input style={s.input} type="number" placeholder="e.g. 0.001" value={orderQty} onChange={e => setOrderQty(e.target.value)} min="0" step="any" />
                       {livePx && orderQty && (
                         <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 6 }}>
                           ≈ ${(parseFloat(orderQty||0) * parseFloat(livePx.price||0)).toLocaleString(undefined,{maximumFractionDigits:2})} USDT
                         </div>
                       )}
                     </div>
-
                     {orderType === "Limit" && (
                       <div>
                         <div style={s.label}>Limit Price (USDT)</div>
                         <input style={s.input} type="number" placeholder={livePx ? `Market: $${parseFloat(livePx.price).toLocaleString()}` : "Price"} value={orderPrice} onChange={e => setOrderPrice(e.target.value)} min="0" step="any" />
                       </div>
                     )}
-
-                    <button
-                      onClick={handlePlaceOrder}
-                      disabled={!orderQty || (orderType === "Limit" && !orderPrice)}
-                      style={{ padding: "14px", borderRadius: 12, cursor: !orderQty ? "not-allowed" : "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: 15, letterSpacing: 2, transition: "all 0.2s", background: !orderQty ? "rgba(255,255,255,0.04)" : (orderSide === "Buy" ? "rgba(0,255,136,0.2)" : "rgba(255,68,102,0.2)"), border: !orderQty ? "1px solid rgba(255,255,255,0.08)" : `1px solid ${orderSide === "Buy" ? "rgba(0,255,136,0.5)" : "rgba(255,68,102,0.5)"}`, color: !orderQty ? "rgba(255,255,255,0.2)" : (orderSide === "Buy" ? "#00ff88" : "#ff4466") }}
-                    >
+                    <button onClick={handlePlaceOrder} disabled={!orderQty || (orderType === "Limit" && !orderPrice)} style={{ padding: "14px", borderRadius: 12, cursor: !orderQty ? "not-allowed" : "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: 15, letterSpacing: 2, transition: "all 0.2s", background: !orderQty ? "rgba(255,255,255,0.04)" : (orderSide === "Buy" ? "rgba(0,255,136,0.2)" : "rgba(255,68,102,0.2)"), border: !orderQty ? "1px solid rgba(255,255,255,0.08)" : `1px solid ${orderSide === "Buy" ? "rgba(0,255,136,0.5)" : "rgba(255,68,102,0.5)"}`, color: !orderQty ? "rgba(255,255,255,0.2)" : (orderSide === "Buy" ? "#00ff88" : "#ff4466") }}>
                       {orderSide === "Buy" ? "▲" : "▼"} REVIEW {orderSide.toUpperCase()} ORDER
                     </button>
                   </div>
                 </div>
 
-                {/* Open orders + history */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={s.card}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -760,7 +741,6 @@ Give grounded, actionable analysis. Brief disclaimer if suggesting trades.`;
                       ))
                     }
                   </div>
-
                   <div style={{ ...s.card, flex: 1, overflow: "hidden" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                       <div style={s.label}>Recent Orders</div>
