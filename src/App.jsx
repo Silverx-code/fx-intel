@@ -234,7 +234,10 @@ export default function FXIntelligence() {
   const [openOrders, setOpenOrders] = useState([]);
   const [orderHistory, setOrderHistory] = useState([]);
   const [orderBook, setOrderBook] = useState(null);
-  const [proxyOnline, setProxyOnline] = useState(false);
+
+  // Proxy status: "checking" | "online" | "offline" | "waking"
+  const [proxyStatus, setProxyStatus] = useState("checking");
+  const proxyOnline = proxyStatus === "online";
 
   // Chat
   const [chatMessages, setChatMessages] = useState([{
@@ -286,16 +289,39 @@ export default function FXIntelligence() {
     setSignals(s);
   }, [ticker]);
 
-  // ── Proxy health check ────────────────────────────────────────────────────
+  // ── Proxy health check with retry logic for Render cold starts ────────────
   useEffect(() => {
-    const check = () => {
-      fetch(`${PROXY}/ticker?symbols=BTCUSDT`, { signal: AbortSignal.timeout(5000) })
-        .then(r => r.ok ? setProxyOnline(true) : setProxyOnline(false))
-        .catch(() => setProxyOnline(false));
+    let cancelled = false;
+
+    const check = async () => {
+      if (cancelled) return;
+      setProxyStatus(prev => prev === "online" ? "online" : "checking");
+
+      // Up to 3 attempts with 5s gaps — handles Render's ~30s cold start
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (cancelled) return;
+        if (attempt > 0) {
+          setProxyStatus("waking");
+          await new Promise(r => setTimeout(r, 5000));
+        }
+        try {
+          const r = await fetch(`${PROXY}/`, {
+            signal: AbortSignal.timeout(15000),
+          });
+          if (r.ok) {
+            if (!cancelled) setProxyStatus("online");
+            return;
+          }
+        } catch {
+          // timeout or network error — try again
+        }
+      }
+      if (!cancelled) setProxyStatus("offline");
     };
+
     check();
-    const interval = setInterval(check, 15000);
-    return () => clearInterval(interval);
+    const interval = setInterval(check, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   // ── Live Binance ticker polling ───────────────────────────────────────────
@@ -373,7 +399,6 @@ export default function FXIntelligence() {
 
   const fetchOrderHistory = async () => {
     try {
-      // Binance requires a symbol — fetch history for selected symbol
       const res = await fetch(`${PROXY}/orders/history`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -517,6 +542,21 @@ Give grounded, actionable analysis. Always add a brief risk disclaimer when sugg
   const livePx = liveTickerData[selectedSymbol.value];
   const impactColor = (i) => i === "HIGH" ? "#ff4466" : i === "MED" ? "#ffaa00" : "#00ff88";
 
+  // ── Proxy status badge ────────────────────────────────────────────────────
+  const ProxyBadge = () => {
+    const cfg = {
+      checking: { color: "#ffaa00", bg: "rgba(255,170,0,0.1)", border: "rgba(255,170,0,0.25)", label: "○ Checking…" },
+      waking:   { color: "#ffaa00", bg: "rgba(255,170,0,0.1)", border: "rgba(255,170,0,0.25)", label: "⟳ Waking proxy…" },
+      online:   { color: "#00ff88", bg: "rgba(0,255,136,0.1)",  border: "rgba(0,255,136,0.25)", label: "⬡ Binance Online" },
+      offline:  { color: "#ff4466", bg: "rgba(255,68,102,0.1)", border: "rgba(255,68,102,0.2)", label: "○ Proxy Offline" },
+    }[proxyStatus];
+    return (
+      <div style={{ fontSize: 10, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.border}`, padding: "2px 8px", borderRadius: 20 }}>
+        {cfg.label}
+      </div>
+    );
+  };
+
   return (
     <div style={s.app}>
       <style>{`
@@ -525,6 +565,7 @@ Give grounded, actionable analysis. Always add a brief risk disclaimer when sugg
         @keyframes ticker { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
         @keyframes fadeSlideIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
         @keyframes dotBounce { 0%,80%,100%{transform:translateY(0);opacity:0.4} 40%{transform:translateY(-6px);opacity:1} }
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
         * { box-sizing:border-box; }
         button:hover { filter:brightness(1.15); }
         input:focus,select:focus { border-color:rgba(0,255,136,0.4)!important; outline:none; }
@@ -537,10 +578,7 @@ Give grounded, actionable analysis. Always add a brief risk disclaimer when sugg
           <span style={{ fontSize: 22 }}>⬡</span>
           <span style={{ fontFamily: "'Syne',sans-serif", fontSize: 20 }}>FX<span style={{ color: "rgba(255,255,255,0.4)" }}>·</span>INTEL</span>
           <div style={s.liveTag}>● LIVE</div>
-          {proxyOnline
-            ? <div style={{ fontSize: 10, color: "#00ff88", background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.25)", padding: "2px 8px", borderRadius: 20 }}>⬡ Binance Online</div>
-            : <div style={{ fontSize: 10, color: "#ff4466", background: "rgba(255,68,102,0.1)", border: "1px solid rgba(255,68,102,0.2)", padding: "2px 8px", borderRadius: 20 }}>○ Proxy Offline</div>
-          }
+          <ProxyBadge />
         </div>
         <div style={s.navBar}>
           {[["trade","⬡ Trade"],["dashboard","◈ Dashboard"],["signals","◈ Signals"],["sentiment","◉ Sentiment"],["calendar","◷ Calendar"],["ai","✦ AI Analyst"]].map(([id, label]) => (
@@ -580,12 +618,23 @@ Give grounded, actionable analysis. Always add a brief risk disclaimer when sugg
             <div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", marginBottom: 4, color: "#fff" }}>⬡ Trade on Binance</div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginBottom: 20 }}>Spot trading via your Binance API keys</div>
 
-            {!proxyOnline && (
+            {/* Proxy status banner */}
+            {proxyStatus === "offline" && (
               <div style={{ ...s.card, marginBottom: 20, background: "rgba(255,68,102,0.06)", border: "1px solid rgba(255,68,102,0.25)" }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#ff4466", marginBottom: 8 }}>⚠️ Proxy Not Reachable</div>
                 <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", lineHeight: 1.8 }}>
                   Your Render proxy is offline or the URL is wrong. Current URL:<br />
                   <code style={{ background: "rgba(0,0,0,0.3)", color: "#00ff88", padding: "8px 14px", borderRadius: 8, display: "inline-block", marginTop: 8, fontSize: 13 }}>{PROXY}</code>
+                </div>
+              </div>
+            )}
+            {(proxyStatus === "checking" || proxyStatus === "waking") && (
+              <div style={{ ...s.card, marginBottom: 20, background: "rgba(255,170,0,0.04)", border: "1px solid rgba(255,170,0,0.2)" }}>
+                <div style={{ fontSize: 13, color: "#ffaa00", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</span>
+                  {proxyStatus === "waking"
+                    ? "Waking up Render proxy — this can take up to 30 seconds on the free tier…"
+                    : "Connecting to proxy…"}
                 </div>
               </div>
             )}

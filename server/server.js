@@ -56,7 +56,6 @@ function binancePublic(path, params) {
 }
 
 // ── Authenticated Binance request ─────────────────────────────────────────────
-// Binance signs the full query string (including timestamp) with HMAC-SHA256
 function binanceRequest(method, path, params, apiKey, apiSecret, body = null) {
   return new Promise((resolve, reject) => {
     const timestamp = Date.now();
@@ -64,9 +63,7 @@ function binanceRequest(method, path, params, apiKey, apiSecret, body = null) {
     const queryString = new URLSearchParams(allParams).toString();
     const signature = sign(apiSecret, body ? queryString + body : queryString);
 
-    const fullPath = method === "GET" || method === "DELETE"
-      ? `${path}?${queryString}&signature=${signature}`
-      : `${path}?${queryString}&signature=${signature}`;
+    const fullPath = `${path}?${queryString}&signature=${signature}`;
 
     const options = {
       hostname: BINANCE_BASE,
@@ -123,8 +120,19 @@ const server = http.createServer(async (req, res) => {
 
   try {
 
+    // ── GET / — health ping ───────────────────────────────────────────────────
+    if (route === "/" && (req.method === "GET" || req.method === "HEAD")) {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        ok: true,
+        service: "FX·INTEL Binance Proxy",
+        uptime: Math.floor(process.uptime()),
+        timestamp: Date.now(),
+      }));
+      return;
+    }
+
     // ── GET /ticker?symbols=BTCUSDT,ETHUSDT ──────────────────────────────────
-    // Uses Binance GET /api/v3/ticker/24hr
     if (route === "/ticker" && req.method === "GET") {
       const symbols = (parsed.query.symbols || "BTCUSDT")
         .split(",").map(s => s.trim()).filter(Boolean);
@@ -152,7 +160,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ── GET /orderbook?symbol=BTCUSDT ────────────────────────────────────────
-    // Uses Binance GET /api/v3/depth
     if (route === "/orderbook" && req.method === "GET") {
       const symbol = parsed.query.symbol || "BTCUSDT";
       const data = await binancePublic("/api/v3/depth", { symbol, limit: 5 });
@@ -162,7 +169,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ── POST /balance { apiKey, apiSecret } ──────────────────────────────────
-    // Uses Binance GET /api/v3/account
     if (route === "/balance" && req.method === "POST") {
       const { apiKey, apiSecret } = bodyJson;
       if (!apiKey || !apiSecret) {
@@ -183,15 +189,14 @@ const server = http.createServer(async (req, res) => {
           available: b.free,
           locked: b.locked,
           total: (parseFloat(b.free) + parseFloat(b.locked)).toString(),
-          usdValue: null, // Binance doesn't return USD value directly
+          usdValue: null,
         }));
       res.writeHead(200);
       res.end(JSON.stringify({ ok: true, balances }));
       return;
     }
 
-    // ── POST /order { apiKey, apiSecret, symbol, side, orderType, qty, price? }
-    // Uses Binance POST /api/v3/order
+    // ── POST /order ──────────────────────────────────────────────────────────
     if (route === "/order" && req.method === "POST") {
       const { apiKey, apiSecret, symbol, side, orderType, qty, price } = bodyJson;
       if (!apiKey || !apiSecret || !symbol || !side || !qty) {
@@ -202,8 +207,8 @@ const server = http.createServer(async (req, res) => {
 
       const params = {
         symbol,
-        side: side.toUpperCase(),        // BUY or SELL
-        type: orderType.toUpperCase(),   // MARKET or LIMIT
+        side: side.toUpperCase(),
+        type: orderType.toUpperCase(),
         quantity: qty,
       };
 
@@ -229,8 +234,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /orders/open { apiKey, apiSecret, symbol? } ─────────────────────
-    // Uses Binance GET /api/v3/openOrders
+    // ── POST /orders/open ────────────────────────────────────────────────────
     if (route === "/orders/open" && req.method === "POST") {
       const { apiKey, apiSecret, symbol } = bodyJson;
       const params = symbol ? { symbol } : {};
@@ -250,8 +254,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /order/cancel { apiKey, apiSecret, symbol, orderId } ────────────
-    // Uses Binance DELETE /api/v3/order
+    // ── POST /order/cancel ───────────────────────────────────────────────────
     if (route === "/order/cancel" && req.method === "POST") {
       const { apiKey, apiSecret, symbol, orderId } = bodyJson;
       if (!symbol || !orderId) {
@@ -265,11 +268,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /orders/history { apiKey, apiSecret, symbol? } ──────────────────
-    // Uses Binance GET /api/v3/allOrders (requires symbol) or myTrades
+    // ── POST /orders/history ─────────────────────────────────────────────────
     if (route === "/orders/history" && req.method === "POST") {
       const { apiKey, apiSecret, symbol } = bodyJson;
-      // Binance requires a symbol for order history — default to BTCUSDT
       const sym = symbol || "BTCUSDT";
       const result = await binanceRequest(
         "GET", "/api/v3/allOrders",
@@ -312,6 +313,7 @@ server.listen(PORT, () => {
   ║   Port: ${PORT}                              ║
   ║                                          ║
   ║   Routes:                                ║
+  ║   GET  /           ← health ping         ║
   ║   GET  /ticker?symbols=BTCUSDT           ║
   ║   GET  /orderbook?symbol=BTCUSDT         ║
   ║   POST /balance                          ║
@@ -325,3 +327,18 @@ server.listen(PORT, () => {
   Press Ctrl+C to stop.
   `);
 });
+
+// ── Keep-alive self-ping for Render free tier ─────────────────────────────────
+// Prevents the service from sleeping after 15 minutes of inactivity.
+// RENDER_EXTERNAL_URL is set automatically by Render in production.
+if (process.env.RENDER_EXTERNAL_URL) {
+  const selfPingUrl = new URL("/", process.env.RENDER_EXTERNAL_URL);
+  setInterval(() => {
+    https.get(selfPingUrl.href, (res) => {
+      console.log(`[Keep-alive] Ping → ${res.statusCode}`);
+    }).on("error", (err) => {
+      console.warn("[Keep-alive] Ping failed:", err.message);
+    });
+  }, 10 * 60 * 1000); // every 10 minutes
+  console.log(`  [Keep-alive] Self-ping active → ${selfPingUrl.href}`);
+}
