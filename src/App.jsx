@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 // 👇 Replace with your actual Render proxy URL after deploying server.js
-const PROXY = "https://fx-intel.onrender.com";
+const PROXY = "https://fx-intel-1.onrender.com";
 
 const CURRENCIES = ["USD/NGN", "EUR/USD", "GBP/USD", "EUR/NGN", "GBP/NGN", "USD/ZAR"];
 const BASE_RATES = {
