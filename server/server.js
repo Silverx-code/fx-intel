@@ -18,7 +18,8 @@ import { parse } from "url";
 const PORT = process.env.PORT || 3001;
 const BINANCE_BASE = "api.binance.com";
 const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
-const GROQ_KEY   = process.env.GROQ_API_KEY   || "";
+const GROQ_KEY        = process.env.GROQ_API_KEY        || "";
+const EXCHANGERATE_KEY = process.env.EXCHANGERATE_API_KEY || "";
 
 if (!GEMINI_KEY && !GROQ_KEY) {
   console.warn("WARNING: Neither GEMINI_API_KEY nor GROQ_API_KEY is set — /ai endpoint will fail.");
@@ -51,6 +52,90 @@ function httpsRequest(options, body = null) {
     if (body) req.write(body);
     req.end();
   });
+}
+
+
+// ── Live FX rates ─────────────────────────────────────────────────────────────
+// Strategy:
+//   EUR/USD, GBP/USD, GBP/NGN, EUR/NGN cross-rates → Frankfurter (free, no key, ECB data)
+//   USD/NGN, USD/ZAR                                → ExchangeRate-API (free key) or Frankfurter cross
+//
+// Frankfurter: https://api.frankfurter.app/latest?from=USD&to=NGN,EUR,GBP,ZAR
+// ExchangeRate-API: https://v6.exchangerate-api.com/v6/{KEY}/latest/USD
+
+async function fetchFXRates() {
+  const pairs = {};
+
+  try {
+    // Frankfurter covers major pairs using ECB data (no NGN unfortunately)
+    const fResult = await httpsRequest({
+      hostname: "api.frankfurter.app",
+      port: 443,
+      path: "/latest?from=USD&to=EUR,GBP,ZAR",
+      method: "GET",
+      headers: { "Accept": "application/json" },
+    });
+
+    if (fResult.status === 200 && fResult.data.rates) {
+      const r = fResult.data.rates;
+      // USD is base=1, so:
+      pairs["EUR/USD"] = r.EUR ? parseFloat((r.EUR).toFixed(6)) : null;
+      pairs["GBP/USD"] = r.GBP ? parseFloat((r.GBP).toFixed(6)) : null;
+      pairs["USD/ZAR"] = r.ZAR ? parseFloat((r.ZAR).toFixed(4)) : null;
+    }
+  } catch (e) {
+    console.warn("[FX] Frankfurter error:", e.message);
+  }
+
+  // Get NGN rates — ExchangeRate-API if key exists, else try Frankfurter USD→NGN
+  try {
+    if (EXCHANGERATE_KEY) {
+      const eResult = await httpsRequest({
+        hostname: "v6.exchangerate-api.com",
+        port: 443,
+        path: `/v6/${EXCHANGERATE_KEY}/latest/USD`,
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+      if (eResult.status === 200 && eResult.data.conversion_rates) {
+        const r = eResult.data.conversion_rates;
+        pairs["USD/NGN"] = r.NGN ? parseFloat(r.NGN.toFixed(2)) : null;
+        // Cross rates: EUR/NGN = EUR/USD * USD/NGN  (inverted: 1/EUR * NGN)
+        if (r.NGN && r.EUR) {
+          pairs["EUR/NGN"] = parseFloat((r.NGN / r.EUR).toFixed(2));
+        }
+        if (r.NGN && r.GBP) {
+          pairs["GBP/NGN"] = parseFloat((r.NGN / r.GBP).toFixed(2));
+        }
+        if (r.ZAR) {
+          pairs["USD/ZAR"] = parseFloat(r.ZAR.toFixed(4));
+        }
+      }
+    } else {
+      // No ExchangeRate key — try Open Exchange Rates free endpoint for NGN
+      // Fallback: use Frankfurter NGN cross via EUR base
+      const fNGN = await httpsRequest({
+        hostname: "api.frankfurter.app",
+        port: 443,
+        path: "/latest?from=EUR&to=NGN,GBP,USD",
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+      // Frankfurter doesn't support NGN — will 422, we catch and skip
+      if (fNGN.status === 200 && fNGN.data.rates?.NGN) {
+        const r = fNGN.data.rates;
+        const eurToNgn = r.NGN;
+        const eurToUsd = r.USD;
+        pairs["USD/NGN"] = parseFloat((eurToNgn / eurToUsd).toFixed(2));
+        pairs["EUR/NGN"] = parseFloat(eurToNgn.toFixed(2));
+        if (r.GBP) pairs["GBP/NGN"] = parseFloat((eurToNgn / r.GBP).toFixed(2));
+      }
+    }
+  } catch (e) {
+    console.warn("[FX] NGN rate error:", e.message);
+  }
+
+  return pairs;
 }
 
 // ── Public Binance request ────────────────────────────────────────────────────
@@ -198,6 +283,12 @@ const server = http.createServer(async (req, res) => {
       return send(200, { ok: true, service: "FX-INTEL Proxy", uptime: Math.floor(process.uptime()), ts: Date.now() });
     }
 
+    // GET /fxrates — live FX pair rates
+    if (route === "/fxrates" && req.method === "GET") {
+      const rates = await fetchFXRates();
+      return send(200, { ok: true, rates, ts: Date.now() });
+    }
+
     // GET /ticker?symbols=BTCUSDT,...
     if (route === "/ticker" && req.method === "GET") {
       const symbols = (parsed.query.symbols || "BTCUSDT").split(",").map(s => s.trim()).filter(Boolean);
@@ -321,6 +412,7 @@ server.listen(PORT, () => {
   GROQ_API_KEY:   ${GROQ_KEY   ? "SET" : "not set"}
   GEMINI_API_KEY: ${GEMINI_KEY ? "SET" : "not set"}
   Active AI:      ${GROQ_KEY ? "Groq (primary)" : GEMINI_KEY ? "Gemini (fallback only)" : "NONE - set a key!"}
+  FX Rates:       Frankfurter (free) + ${EXCHANGERATE_KEY ? "ExchangeRate-API (NGN)" : "no NGN key — add EXCHANGERATE_API_KEY for NGN"}
   `);
 });
 

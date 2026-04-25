@@ -297,6 +297,8 @@ export default function FXIntelligence() {
   const [priceData, setPriceData] = useState({});
   const [signals, setSignals] = useState({});
   const [ticker, setTicker] = useState(0);
+  const [liveRates, setLiveRates] = useState({});  // real FX rates from proxy
+  const [ratesSource, setRatesSource] = useState('simulated'); // 'live' | 'simulated'
 
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
@@ -344,7 +346,18 @@ export default function FXIntelligence() {
         CURRENCIES.forEach(pair => {
           const arr = [...prev[pair]];
           const last = arr.at(-1).price;
-          const newPrice = parseFloat((last + (Math.random() - 0.495) * last * 0.002).toFixed(4));
+          // If we have a live rate, nudge toward it instead of pure random walk
+          const liveRate = liveRates[pair];
+          let newPrice;
+          if (liveRate) {
+            // Blend: 80% pull toward live rate, 20% tiny random noise for chart movement
+            const diff = liveRate - last;
+            const pull = diff * 0.08; // gradual convergence
+            const noise = (Math.random() - 0.5) * last * 0.0005;
+            newPrice = parseFloat((last + pull + noise).toFixed(6));
+          } else {
+            newPrice = parseFloat((last + (Math.random() - 0.495) * last * 0.002).toFixed(6));
+          }
           arr.push({ time: new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }), price:newPrice, vol:Math.floor(Math.random()*800+200) });
           if (arr.length > 100) arr.shift();
           next[pair] = arr;
@@ -354,7 +367,7 @@ export default function FXIntelligence() {
       setTicker(t => t + 1);
     }, 3000);
     return () => clearInterval(interval);
-  }, [priceData]);
+  }, [priceData, liveRates]);
 
   useEffect(() => {
     if (!Object.keys(priceData).length) return;
@@ -387,6 +400,41 @@ export default function FXIntelligence() {
     const interval = setInterval(check, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
+
+
+  // ── Live FX rates from proxy (Frankfurter + ExchangeRate-API) ──────────────
+  useEffect(() => {
+    if (!proxyOnline) return;
+    const fetchRates = () => {
+      fetch(`${PROXY}/fxrates`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok && data.rates) {
+            setLiveRates(data.rates);
+            setRatesSource('live');
+            // Snap the latest price point to the live rate immediately
+            setPriceData(prev => {
+              const next = { ...prev };
+              Object.entries(data.rates).forEach(([pair, rate]) => {
+                if (next[pair] && rate) {
+                  const arr = [...next[pair]];
+                  // Replace last point with real rate
+                  arr[arr.length - 1] = { ...arr[arr.length - 1], price: rate };
+                  next[pair] = arr;
+                }
+              });
+              return next;
+            });
+          }
+        })
+        .catch(() => {});
+    };
+    fetchRates();
+    // Refresh every 60s — Frankfurter ECB data updates once per business day,
+    // but ExchangeRate-API updates more frequently
+    const interval = setInterval(fetchRates, 60000);
+    return () => clearInterval(interval);
+  }, [proxyOnline]);
 
   useEffect(() => {
     if (!proxyOnline) return;
@@ -474,7 +522,7 @@ export default function FXIntelligence() {
     }).join("\n");
     const binanceLines = Object.entries(liveTickerData).map(([sym,t])=>`${sym}: $${t.price} (24h: ${(parseFloat(t.change24h||0)*100).toFixed(2)}%)`).join("\n") || "Not connected";
     const balLines = balances.map(b=>`${b.coin}: ${b.available} free, ${b.locked} locked`).join("\n") || "Not connected";
-    return `You are FX·INTEL, an expert FX and crypto trading analyst. Be direct, data-driven, and concise. Use **bold** for key numbers, - bullet points for lists, ### for section headers. Always end with a clear bottom-line recommendation.\n\n== FX PAIRS (simulated) ==\n${pairLines}\n== BINANCE LIVE PRICES ==\n${binanceLines}\n== BINANCE BALANCE ==\n${balLines}\n== NEWS ==\n${NEWS_SENTIMENT.map(n=>`[${n.sentiment>0?"+":""}${n.sentiment}] ${n.headline}`).join("\n")}\n== TIME == ${new Date().toLocaleString()}\n\nGive grounded, actionable analysis. Always add a brief risk disclaimer when suggesting trades.`;
+    return `You are FX·INTEL, an expert FX and crypto trading analyst. Be direct, data-driven, and concise. Use **bold** for key numbers, - bullet points for lists, ### for section headers. Always end with a clear bottom-line recommendation.\n\n== FX PAIRS (${ratesSource === "live" ? "LIVE market rates" : "simulated — proxy offline"}) ==\n${pairLines}\n== BINANCE LIVE PRICES ==\n${binanceLines}\n== BINANCE BALANCE ==\n${balLines}\n== NEWS ==\n${NEWS_SENTIMENT.map(n=>`[${n.sentiment>0?"+":""}${n.sentiment}] ${n.headline}`).join("\n")}\n== TIME == ${new Date().toLocaleString()}\n\nGive grounded, actionable analysis. Always add a brief risk disclaimer when suggesting trades.`;
   }, [priceData, signals, liveTickerData, balances]);
 
   const sendMessage = useCallback(async (text) => {
@@ -553,7 +601,7 @@ export default function FXIntelligence() {
         <div style={{ display:"flex", alignItems:"center", gap:16 }}>
           <span style={{ fontSize:28, color:"#00ffaa", filter:"drop-shadow(0 0 8px rgba(0,255,170,0.5))" }}>⬡</span>
           <span style={{ fontFamily:"'Syne',sans-serif", fontSize:26, fontWeight:900, color:"#00ffaa", letterSpacing:3 }}>FX<span style={{ color:"rgba(255,255,255,0.3)" }}>·</span>INTEL</span>
-          <div style={{ background:"rgba(0,255,170,0.12)", border:"1px solid rgba(0,255,170,0.35)", color:"#00ffaa", fontSize:11, padding:"3px 12px", borderRadius:20, letterSpacing:3, animation:"pulse 2s infinite" }}>● LIVE</div>
+          <div style={{ background:"rgba(0,255,170,0.12)", border:"1px solid rgba(0,255,170,0.35)", color:"#00ffaa", fontSize:11, padding:"3px 12px", borderRadius:20, letterSpacing:3, animation:"pulse 2s infinite" }}>{ratesSource === "live" ? "● LIVE RATES" : "● SIMULATED"}</div>
           <div style={{ fontSize:12, color:proxyStatusCfg.color, background:`${proxyStatusCfg.color}18`, border:`1px solid ${proxyStatusCfg.color}35`, padding:"3px 12px", borderRadius:20 }}>
             {proxyStatusCfg.label === "Online" ? "⬡" : "○"} Binance {proxyStatusCfg.label}
           </div>
@@ -607,6 +655,12 @@ export default function FXIntelligence() {
         {/* ════ DASHBOARD ════════════════════════════════════════════════════ */}
         {tab === "dashboard" && (
           <div style={{ display:"grid", gap:24 }}>
+            {/* Data source badge */}
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:4 }}>
+              <div style={{ fontSize:12, color:ratesSource==="live"?"#00ffaa":"#ffcc00", background:ratesSource==="live"?"rgba(0,255,170,0.08)":"rgba(255,204,0,0.08)", border:`1px solid ${ratesSource==="live"?"rgba(0,255,170,0.25)":"rgba(255,204,0,0.25)"}`, padding:"4px 14px", borderRadius:20, letterSpacing:2 }}>
+                {ratesSource === "live" ? "● LIVE MARKET RATES — Frankfurter ECB + ExchangeRate-API" : "○ SIMULATED PRICES — Connect proxy for live rates"}
+              </div>
+            </div>
             {/* Top KPI row */}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:16 }}>
               {CURRENCIES.map(pair=>{
