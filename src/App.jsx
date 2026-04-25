@@ -1058,7 +1058,7 @@ export default function FXIntelligence() {
                 <div style={{ width:48, height:48, borderRadius:14, background:"rgba(0,255,170,0.12)", border:"1px solid rgba(0,255,170,0.3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>⬡</div>
                 <div>
                   <div style={{ fontSize:20, fontWeight:700, color:"#fff", fontFamily:"'Syne',sans-serif" }}>FX·INTEL AI Analyst</div>
-                  <div style={{ fontSize:13, color:"#00ffaa", marginTop:4 }}>✦ Gemini AI · {CURRENCIES.length} FX pairs · Binance{credsSaved?" · Connected":""}</div>
+                  <div style={{ fontSize:13, color:"#00ffaa", marginTop:4 }}>✦ Groq / Gemini · {CURRENCIES.length} FX pairs · Binance{credsSaved?" · Connected":""}</div>
                 </div>
                 <button style={{ ...btn, marginLeft:"auto", fontSize:13, padding:"8px 18px" }} onClick={()=>setChatMessages([{role:"assistant",content:"Cleared. Ready for fresh analysis.",timestamp:new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}])}>↺ Clear</button>
               </div>

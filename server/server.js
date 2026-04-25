@@ -18,9 +18,10 @@ import { parse } from "url";
 const PORT = process.env.PORT || 3001;
 const BINANCE_BASE = "api.binance.com";
 const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
+const GROQ_KEY   = process.env.GROQ_API_KEY   || "";
 
-if (!GEMINI_KEY) {
-  console.warn("WARNING: GEMINI_API_KEY env var is not set — /ai endpoint will fail.");
+if (!GEMINI_KEY && !GROQ_KEY) {
+  console.warn("WARNING: Neither GEMINI_API_KEY nor GROQ_API_KEY is set — /ai endpoint will fail.");
 }
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
@@ -74,32 +75,93 @@ function binanceAuth(method, path, params, apiKey, apiSecret) {
   });
 }
 
-// ── Google Gemini request ─────────────────────────────────────────────────────
-// Converts {role, content} messages to Gemini contents format.
-// Gemini roles: "user" | "model"  (not "assistant")
-function geminiRequest(system, messages) {
+// ── Groq request (llama-3.3-70b — free, fast) ────────────────────────────────
+function groqRequest(system, messages) {
+  const bodyObj = {
+    model: "llama-3.3-70b-versatile",
+    max_tokens: 1000,
+    temperature: 0.7,
+    messages: [{ role: "system", content: system }, ...messages],
+  };
+  const bodyStr = JSON.stringify(bodyObj);
+  return httpsRequest({
+    hostname: "api.groq.com",
+    port: 443,
+    path: "/openai/v1/chat/completions",
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${GROQ_KEY}`,
+      "Content-Length": Buffer.byteLength(bodyStr),
+    },
+  }, bodyStr);
+}
+
+// ── Gemini request (fallback) ─────────────────────────────────────────────────
+// Tries gemini-1.5-flash first, then gemini-2.0-flash as secondary
+function geminiRequest(system, messages, model = "gemini-1.5-flash") {
   const contents = messages.map(m => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }],
   }));
-
   const bodyObj = {
     system_instruction: { parts: [{ text: system }] },
     contents,
     generationConfig: { maxOutputTokens: 1000, temperature: 0.7 },
   };
   const bodyStr = JSON.stringify(bodyObj);
-
   return httpsRequest({
     hostname: "generativelanguage.googleapis.com",
     port: 443,
-    path: `/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+    path: `/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`,
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(bodyStr),
     },
   }, bodyStr);
+}
+
+// ── AI dispatcher — tries Groq first, falls back to Gemini ───────────────────
+async function aiRequest(system, messages) {
+  // Try Groq first (fastest, most reliable free tier)
+  if (GROQ_KEY) {
+    try {
+      const result = await groqRequest(system, messages);
+      if (result.status === 200) {
+        const text = result.data?.choices?.[0]?.message?.content || "No response.";
+        return { ok: true, text, provider: "Groq" };
+      }
+      console.warn("[AI] Groq failed:", result.status, JSON.stringify(result.data).slice(0, 200));
+    } catch (e) {
+      console.warn("[AI] Groq error:", e.message);
+    }
+  }
+
+  // Try Gemini 1.5-flash
+  if (GEMINI_KEY) {
+    try {
+      let result = await geminiRequest(system, messages, "gemini-1.5-flash");
+      if (result.status === 200) {
+        const text = result.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+        return { ok: true, text, provider: "Gemini 1.5" };
+      }
+      console.warn("[AI] Gemini 1.5 failed:", result.status, JSON.stringify(result.data).slice(0, 200));
+
+      // Try Gemini 2.0-flash as last resort
+      result = await geminiRequest(system, messages, "gemini-2.0-flash");
+      if (result.status === 200) {
+        const text = result.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+        return { ok: true, text, provider: "Gemini 2.0" };
+      }
+      const errMsg = result.data?.error?.message || "Gemini quota exceeded.";
+      return { ok: false, error: errMsg };
+    } catch (e) {
+      return { ok: false, error: "Gemini error: " + e.message };
+    }
+  }
+
+  return { ok: false, error: "No AI provider configured. Set GROQ_API_KEY or GEMINI_API_KEY in Render." };
 }
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
@@ -219,24 +281,17 @@ const server = http.createServer(async (req, res) => {
       return send(200, { ok: true, orders });
     }
 
-    // POST /ai — Gemini proxy
+    // POST /ai — multi-provider AI proxy (Groq → Gemini 1.5 → Gemini 2.0)
     // Body: { system: string, messages: [{role, content}] }
     if (route === "/ai" && req.method === "POST") {
-      if (!GEMINI_KEY) return send(500, { ok: false, error: "GEMINI_API_KEY not configured on server." });
-
+      if (!GROQ_KEY && !GEMINI_KEY) {
+        return send(500, { ok: false, error: "No AI key configured. Set GROQ_API_KEY or GEMINI_API_KEY in Render environment." });
+      }
       const { system, messages } = body;
       if (!messages || !Array.isArray(messages)) return send(400, { ok: false, error: "messages array required" });
-
-      const result = await geminiRequest(system || "", messages);
-
-      if (result.status !== 200) {
-        console.error("[Gemini] Error:", JSON.stringify(result.data));
-        return send(200, { ok: false, error: result.data?.error?.message || "Gemini error" });
-      }
-
-      // Extract text from Gemini response and return simple {ok, text} shape
-      const text = result.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response from Gemini.";
-      return send(200, { ok: true, text });
+      const aiResult = await aiRequest(system || "", messages);
+      console.log(`[AI] Provider: ${aiResult.provider || "none"} | ok: ${aiResult.ok}`);
+      return send(200, aiResult);
     }
 
     // 404
@@ -263,7 +318,9 @@ server.listen(PORT, () => {
     POST /orders/history Order history
     POST /ai            Gemini AI proxy
 
-  GEMINI_API_KEY: ${GEMINI_KEY ? "SET" : "MISSING - add it in Render > Environment"}
+  GROQ_API_KEY:   ${GROQ_KEY   ? "SET" : "not set"}
+  GEMINI_API_KEY: ${GEMINI_KEY ? "SET" : "not set"}
+  Active AI:      ${GROQ_KEY ? "Groq (primary)" : GEMINI_KEY ? "Gemini (fallback only)" : "NONE - set a key!"}
   `);
 });
 
